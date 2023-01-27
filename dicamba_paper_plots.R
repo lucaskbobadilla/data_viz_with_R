@@ -51,6 +51,8 @@ ggsave("dicamba_bayes.tiff", width = 38, height = 15, units = "cm", dpi = 300)
 
 # FIGURE 3 -------------------------------------
 
+# THIS IS ON A SEPARATE FILE NAMED DR_ANALYSIS.RMD
+
 ## PLOT A --------------------------------
 
 dicamba_24D <- tukey_final %>% 
@@ -136,4 +138,52 @@ arrows(0.1, 50, 361.2035, 50, code=0, lty=1, col="black") # 50%
 dev.off()
 
 
+## FIGURE 6 -----------------
 
+#ggridge plots
+library(ggridges)
+
+df_plot <- df_pooled %>%
+  mutate(population = as.character(population),
+         population = case_when(population == "RxR-2" ~ "Resistant",
+                                population == "CHR" ~ "Resistant",
+                                population == "F1-3" ~ "F1 S♀ x R♂",
+                                population == "F1-1" ~ "F1 R♀ x S♂",
+                                population == "BC-1" ~ "BC-1",
+                                population == "BC-2" ~ "BC-2",
+                                population == "WUS" ~ "Sensitive",
+                                population == "F2" ~ "F2"),
+         population = factor(population, levels = c("Sensitive", "Resistant", "BC-2", "BC-1", "F1 S♀ x R♂","F1 R♀ x S♂","F2")))
+
+
+area_ridge <- df_plot %>% 
+  filter(population != "RxR-6") %>% 
+    ggplot(aes(x = log(area_cm), y = population, fill = population)) +
+      geom_density_ridges(stat="binline",bins = 25, alpha = .5) +
+  theme_ridges(center_axis_labels = TRUE) +
+   theme(legend.position = "none", legend.title = element_blank(),
+         axis.line = element_line(color="black", size = .5),
+         plot.title = element_text(hjust = 0.5)) +
+  labs(x = expression ("Log plant area - "~cm^2), y = "Population")
+
+biomass_ridge <- df_plot %>% 
+  filter(population != "RxR-6") %>% 
+    ggplot(aes(x = log(Biomass), y = population, fill = population)) +
+      geom_density_ridges(stat="binline",bins = 25, alpha = .5) +
+  theme_ridges(center_axis_labels = TRUE) +
+   theme(legend.position = "none", legend.title = element_blank(),
+         axis.line = element_line(color="black", size = .5),
+         plot.title = element_text(hjust = 0.5),
+         axis.text.y = element_blank()) +
+  labs(x = "Log Biomass - g", y = "")
+
+
+library(patchwork)
+
+
+
+area_ridge + biomass_ridge + plot_annotation(tag_levels = 'A')  & 
+  theme(plot.tag = element_text(size = 12, face = "bold"),
+        text = element_text('Times New Roman')) 
+
+ggsave("ridge_plot.tiff", units = "in", height = 6, width = 14, dpi = 300)

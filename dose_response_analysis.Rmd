@@ -1,0 +1,677 @@
+---
+title: "Sensitive dose response trial A - October 2019"
+author: "Lucas Kopecky Bobadilla"
+date: "10/21/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Packages
+
+```{r packages}
+
+library(tidyverse)
+library(MASS)
+library(drc)
+library(car)
+library(readxl)
+library(gridExtra)
+```
+
+
+# load data
+
+```{r load data}
+
+df <- read_excel("data_DIC_DR.xlsx", sheet = "with_all") # open the data
+
+df <- df %>%
+  mutate(damage_2 = (`damage_%`-100)*-1,
+         adj_weight = (`biomass_%`*damage_2)/100)
+
+
+
+fac <- c("block", "population","TRIAL", "plot","type") # select factors
+df[fac] <- lapply(df[fac], factor) # transform farctors
+
+
+
+glimpse(df) # check structure
+summary(df) 
+
+df <- df %>% 
+  mutate(population = if_else(as.character(population) == "RxR-4" | as.character(population) == "RxR-6", "CHR",as.character(population)),
+         population = factor(population, levels = c("CHR", "F1-1", "F1-2", "F1-3", "F1-4", "WUS")))
+
+
+
+```
+
+```{r check if data can be pulled}
+
+# Check if data can be pooled for biomass reduction
+with(df, leveneTest(`biomass_%`, spray_date)) #block can be pooled according to this test.
+
+
+# Check if data can be pooled for damage 
+with(df, leveneTest(`damage_%`, spray_date)) #block can be pooled according to this test.
+
+# check if data can be pooled for survival
+with(df, leveneTest(survival, spray_date))
+
+
+
+# ok to poll data
+df %>%
+  ggplot(aes(y = `biomass_%`, x = block)) +
+  geom_boxplot()
+
+
+# check if F1 population data can be pulled
+with(df %>% filter(type == "F1") %>% droplevels(), leveneTest(`biomass_%`, population))
+with(df %>% filter(type == "F1") %>% droplevels(), leveneTest(adj_weight, population))
+with(df %>% filter(type == "F1") %>% droplevels(), leveneTest(`damage_%`, population))
+
+# check if R population data can be pulled
+with(df %>% filter(type == "R") %>% droplevels(), leveneTest(`biomass_%`, population))
+with(df %>% filter(type == "R") %>% droplevels(), leveneTest(adj_weight, population))
+with(df %>% filter(type == "R") %>% droplevels(), leveneTest(`damage_%`, population))
+
+```
+
+
+```{r plot distribution}
+
+pl1 <- ggplot(df, aes(x=treatment, y=`biomass_%`)) + geom_jitter() + 
+  xlab("Dicamba (g a.e/ha)") +
+  ylab("Biomass reduction (%)")+
+  ggtitle("Data distribution - original rate") +
+  theme_classic() + 
+  stat_smooth(method = "nls", 
+              formula = y ~ SSasymp(x, Asym, R0, lrc), 
+              se = FALSE, aes(color = population))+
+  theme(legend.position = "bottom")# check data distribution for biomass
+
+
+pl1.log <- ggplot(df, aes(x=log(treatment+.1), y=`biomass_%`)) + geom_jitter() + 
+  xlab("Dicamba (g a.e/ha)") +
+  ylab("Biomass reduction in relation to control (%)")+
+  ggtitle("Data distribution - Biomass reduction") +
+  theme_classic() +
+  geom_smooth(aes(color = population), se = F) +
+  theme(legend.position = "bottom")# check data distribution for biomass
+
+
+
+ggplot(df, aes(x=treatment, y=survival)) + geom_point() + 
+  xlab("Dicamba treatment (g a.e/ha)") +
+  ylab("Survival probability") +
+  ggtitle("Distribution survival") +
+  theme_classic() + 
+  stat_smooth(method="glm", 
+              method.args=list(family="binomial"), 
+              se=F, aes(color = pop_2)) +
+  theme(legend.position = "bottom") + labs(colour = "Population")
+  # check data distribution for survivality
+ggsave("survival.jpg")
+
+pl3 <- ggplot(df, aes(x=treatment, y=`damage_%`)) + geom_jitter() + 
+  xlab("Dicamba (g a.e/ha)") +
+  ylab("Damage (%)")+
+  ggtitle("Data distribution damage (%)") +
+  theme_classic() + 
+  stat_smooth(method = "nls", 
+              formula = y ~ SSasymp(x, Asym, R0, lrc), 
+              se = FALSE, aes(color = population)) +
+  theme(legend.position = "bottom")# check data distribution for biomass # check data distribution for biomass
+
+
+
+```
+
+
+# DRC analysis
+
+## DRC model selection
+
+### biomass
+
+Results show that 3 parameter model have a lower AIC
+
+```{r biomass model, message=FALSE, warning=FALSE}
+
+
+#builds a model with three parameters
+parm.3.biomass <- drm(`biomass_%` ~ treatment, population, 
+              data= df, 
+              fct=LL.3(names=c("b", "upper", "ed50"))) 
+#builds a model with four parameters
+parm.4.biomass <- drm(`biomass_%` ~ treatment, population, data= df,  
+              fct=LL.4(names=c("b","lower", "upper", "ed50"))) 
+
+# builds a model with five parameters
+parm.5.biomass <- drm(`biomass_%` ~ treatment, population, data= df,  
+              fct=LL.5())
+
+# linear model
+ANOVA.model <- lm(`biomass_%` ~ as.factor(treatment)*population, data=df)
+
+#Creates a table with the AICcs from both models
+AICc.table <- data.frame(AIC(parm.3.biomass),AIC(parm.4.biomass), 
+                         AIC(parm.5.biomass), AIC(ANOVA.model))  
+
+colnames(AICc.table)<-c("3 parameter","4 parameter", 
+                        "5 parameter", "ANOVA") #Name the columns
+
+AICc.table
+
+
+# biomass
+par(mfrow=c(1,2))
+plot(residuals(parm.3.biomass) ~ fitted(parm.3.biomass)) # heteroskedacity
+qqnorm(residuals(parm.3.biomass)) # normality
+qqline(residuals(parm.3.biomass)) # normality
+
+biomass_model <- parm.3.biomass # chosen model
+
+```
+
+```{r fligner.test}
+Group = rep("Lower",nrow(df)) #Creates a vector that repeats "Lower" n times
+Group[df$`biomass_%` > median(df$`biomass_%`)] = "Upper" #Changing the appropriate values to "Upper"
+Group = as.factor(Group) #Changes it to a factor, which R recognizes as a grouping variable.
+df$Group = Group
+the.FKtest= fligner.test(residuals(biomass_model), df$Group)
+the.FKtest
+```
+
+```{r shapiro test}
+
+#S-W test normality test
+
+shapiro.test(residuals(biomass_model))
+
+```
+
+```{r check for outliers}
+
+#outiers identification using semi-studentized residuals
+ei.s = residuals(biomass_model)/sqrt(sum(residuals(biomass_model)^2)/(nrow(df) - length(biomass_model$coefficients)))
+alpha = 0.1 ; n = nrow(df); p = length(biomass_model$coefficients)
+cutoff = qt(1-alpha/(2*n), n -p )
+cutoff.deleted = qt(1-alpha/(2*n), n -p -1 )
+outliers = which(abs(ei.s)> cutoff)
+outliers
+
+new.data = df[-outliers,]
+
+# check if fix
+
+#fitting a new model with parm.4 without outliers
+parm.3.biomass.noOutlier <- drm(`biomass_%` ~ treatment, population, data=new.data, 
+               fct=LL.3(names=c("b", "upper", "ed50")))
+
+
+par(mfrow=c(1,2))
+plot(residuals(parm.3.biomass.noOutlier) ~ fitted(parm.3.biomass.noOutlier)) # heteroskedacity
+qqnorm(residuals(parm.3.biomass.noOutlier)) # normality
+qqline(residuals(parm.3.biomass.noOutlier)) # normality
+
+```
+
+### Box cox correction
+
+```{r}
+#fitting a new model with p without outliers
+
+par.3.BX.biomass <- boxcox(parm.3.biomass.noOutlier, method = "anova")
+
+ED(par.3.BX,50,interval="delta")
+EDcomp(par.3.BX, c(50, 50), interval="delta", reverse=TRUE)
+
+summary(par.3.BX.biomass)
+
+plot(par.3.BX, bp=.2, bty="l",
+     ylab=" Biomass reduction (%)",
+     xlab="Dicamba (g a.e /ha)",
+     main="Biomass dose response",
+     xlim=c(0,100000),
+     col = T,
+     ylim = c(0,110),
+     broken = T,
+     pch = 1,
+     lwd = 2.5)
+
+
+sum <- summary(par.3.BX.biomass)
+coef <- data.frame(sum$coefficients)
+coef <- rownames_to_column(coef, "source")
+
+coef <- coef %>% separate(source, c("parameter", "population"), sep = ":") 
+
+fac <- c("population", "parameter")
+coef[fac] <- lapply(coef[fac], factor)
+
+
+coef_biomass <- coef %>% 
+  mutate(Std..Error = sprintf("%.2f",round(Std..Error, 2)),
+         Estimate = sprintf("%.2f",round(Estimate, 2)),
+         response = "Biomass") %>%
+  dplyr::select(- c(t.value,p.value)) %>%
+  mutate(plus = "±",
+         Final = paste(Estimate," (",plus,Std..Error,")",sep="")) %>% 
+  dplyr::select(parameter, population, response, Final)
+
+write_csv(coef_biomass,"DR_results_biomass.csv")
+
+```
+
+#### Mortality
+
+
+```{r}
+#mortality
+mortal.glm <- glm(survival ~ treatment*population, 
+                  data = df, 
+                  family = binomial(link = "logit")) # fit glm
+anova(mortal.glm, test = "Chisq") # get the analysis of deviance
+
+
+
+mortal_DR <- drm(survival ~ treatment,population, 
+                  data = df, 
+                  fct = LL.2(), 
+               type = "binomial", 
+               na.action = na.omit) # fit drc binomial model
+
+summary(mortal_DR)
+```
+
+
+
+### Damage
+
+Results show that 3 parameter model have a lower AIC
+
+```{r damage model selection}
+
+
+#builds a model with three parameters
+parm.3 <- drm(`damage_%` ~ treatment, population, data= df, 
+              fct=LL.3(names=c("b", "upper", "ed50"))) 
+#builds a model with four parameters
+parm.4 <- drm(`damage_%` ~ treatment, population, data= df,  
+              fct=LL.4(names=c("b","lower", "upper", "ed50"))) 
+
+# builds a model with five parameters
+parm.5 <- drm(`damage_%` ~ treatment, population, data= df,  
+              fct=LL.5())
+
+# linear model
+ANOVA.model <- lm(`damage_%` ~ as.factor(treatment)*population, data=df)
+
+#Creates a table with the AICcs from both models
+AICc.table <- data.frame(AIC(parm.3),AIC(parm.4), 
+                         AIC(parm.5), AIC(ANOVA.model))  
+
+colnames(AICc.table)<-c("3 parameter","4 parameter", 
+                        "5 parameter", "ANOVA") #Name the columns
+
+AICc.table
+
+damage.drc <- parm.3
+```
+
+
+
+## model fit
+
+
+```{r check assumptions}
+
+#biomass
+par(mfrow=c(1,2))
+plot(residuals(biomass_model) ~ fitted(biomass_model)) # heteroskedacity
+qqnorm(residuals(biomass_model)) # normality
+qqline(residuals(biomass_model)) # normality
+
+#damage
+par(mfrow=c(1,2))
+plot(residuals(damage.drc) ~ fitted(damage.drc)) # heteroskedacity
+qqnorm(residuals(damage.drc)) # normality
+qqline(residuals(damage.drc)) # normality
+
+
+
+
+
+# Issues with normality
+```
+
+
+
+```{r check for outliers}
+
+
+
+#outiers identification using semi-studentized residuals for damage 
+
+ei.s = residuals(damage.drc)/sqrt(sum(residuals(damage.drc)^2)/(nrow(df) - length(damage.drc$coefficients)))
+alpha = 0.1 ; n = nrow(df); p = length(damage.drc$coefficients)
+cutoff = qt(1-alpha/(2*n), n -p )
+cutoff.deleted = qt(1-alpha/(2*n), n -p -1 )
+outliers = which(abs(ei.s)> cutoff)
+outliers
+
+df_damage <- df[-outliers,]
+
+
+
+```
+
+
+## Refit the model without the outliers
+
+
+```{r refit model without outliers}
+
+damage_drc <- drm(`damage_%` ~ treatment, population, data= df_damage, 
+              fct=LL.3(names=c("b", "upper", "ed50"))) 
+
+
+#biomass
+par(mfrow=c(1,2))
+plot(residuals(par.3.BX) ~ fitted(par.3.BX)) # heteroskedacity
+qqnorm(residuals(par.3.BX)) # normality
+qqline(residuals(par.3.BX)) # normality
+
+#damage
+par(mfrow=c(1,2))
+plot(residuals(damage_drc) ~ fitted(damage_drc)) # heteroskedacity
+qqnorm(residuals(damage_drc)) # normality
+qqline(residuals(damage_drc)) # normality
+
+
+
+```
+
+
+
+
+```{r}
+summary(biomass_model)
+EDcomp(biomass_model, c(50,50))
+EDcomp(biomass_model, c(90,90))
+biomass_par <- data.frame(biomass_model$coefficients)
+write_excel_csv(biomass_par, "biomass_trial_A.csv")
+
+
+summary(damage_drc)
+ED(biomass_drc,c(90,50), interval = "delta")
+ED(damage.drc,c(90,50), interval = "delta")
+ED(adj_drc,c(90,50), interval = "delta")
+ED(mortal.drc,c(90,50), interval = "delta")
+
+
+summary(mortal.drc)
+
+damage_par <- data.frame(damage.drc$coefficients)
+write_excel_csv(damage_par, "damage_par.csv")
+summary(mortal.drc)
+mortal_par <-data.frame(mortal.drc$coefficients)
+write_excel_csv(mortal_par, "mortal_par.csv")
+
+
+
+
+
+```
+
+```{r plots}
+
+plot(biomass_model, bp=.2, bty="l",
+     ylab="Biomass reduction (%)",
+     xlab="Dicamba (g a.e /ha)",
+     main="Biomass reduction dose response",
+     xlim=c(0,100000),
+     col = T,
+     ylim = c(0,120),
+     broken = T,
+     pch = 1,
+     lwd = 2.5)
+arrows(.1, 50, 200, 50, code=0, lty=1, col="red")
+arrows(200, 50, 200, 0, code=0, lty=1, col="red")
+
+plot(damage.drc, bp=.1, bty="l",
+     ylab="Damage (%)",
+     xlab="Dicamba (g a.e /ha)",
+     main="Plant damage % dose response",
+     xlim=c(0,10000),
+     col = T,
+     ylim = c(0,100),
+     broken = T)
+
+
+plot(mortal.drc, bp=.1, bty="l",
+     ylab="Probability of survival 21 DAT",
+     main = "Mortality dose response",
+     xlab="Dicamba (g a.e /ha)",
+     xlim=c(0,1000000),
+     col = T,
+     broken = T,
+     pch = 1,
+     lwd = 2.5)
+
+plot(adj.drc, bp=.1, bty="l",
+     ylab="Adjusted weight",
+     main = "Adjusted weight dose response",
+     xlab="Dicamba (g a.e /ha)",
+     xlim=c(0,10000),
+     ylim = c(0,110),
+     col = T,
+     broken = T,
+     pch = 1,
+     lwd = 2.5)
+
+```
+
+
+```{r}
+#builds a model with three parameters
+parm.3 <- drm(adj_weight ~ treatment, type, data= df, 
+              fct=LL.3(names=c("b", "upper", "ed50"))) 
+#builds a model with four parameters
+parm.4 <- drm(adj_weight ~ treatment, type, data= df,  
+              fct=LL.4(names=c("b","lower", "upper", "ed50"))) 
+
+# builds a model with five parameters
+parm.5 <- drm(adj_weight ~ treatment, type, data= df,  
+              fct=LL.5())
+
+# linear model
+ANOVA.model <- lm(adj_weight ~ as.factor(treatment)*type, data=df)
+
+#Creates a table with the AICcs from both models
+AICc.table <- data.frame(AIC(parm.3),AIC(parm.4), 
+                         AIC(parm.5), AIC(ANOVA.model))  
+
+colnames(AICc.table)<-c("3 parameter","4 parameter", 
+                        "5 parameter", "ANOVA") #Name the columns
+
+AICc.table
+
+df_adj
+
+adj.drc <- drm(adj_weight+.01 ~ treatment, type, data= df_adj, 
+              fct=LL.3(names=c("b", "upper", "ed50"))) 
+
+par(mfrow=c(1,2))
+plot(residuals(adj.drc.BX) ~ fitted(adj.drc.BX)) # heteroskedacity
+qqnorm(residuals(adj.drc.BX)) # normality
+qqline(residuals(adj.drc.BX)) # normality
+
+adj.drc.BX <- boxcox(adj.drc, method = "anova")
+
+plot(adj.drc, bp=.1, bty="l",
+     ylab="Adjusted weight",
+     main = "Adjusted weight dose response",
+     xlab="Dicamba (kg a.e /ha)",
+     xlim=c(0,9000),
+     ylim=c(0,110),
+     col = T,
+     broken = T)
+
+
+#dominance degree####
+
+summary(adj.drc)
+ED <- data.frame(ED(par.3.BX.biomass,c(50), interval = "delta"))
+
+ED %>%
+  rownames_to_column() %>%
+  dplyr::select(rowname, Estimate) %>%
+  spread(key = rowname, Estimate) %>%
+  rename("W3" = `e:F1-4:50`,
+         "W1" = `e:WUS:50`) %>%
+  mutate(W2 = mean(`e:CHR:50`),
+         D = (((2*W3) - W2 - W1))/(W2-W1)) %>%
+  dplyr::select(W1,W2,W3,D)
+
+
+
+
+
+```
+
+```{r}
+
+# get data without outliers
+df_plot <- new.data
+#create separate data frames for each population
+chr <- df_plot %>% filter(population == "CHR")
+f11 <- df_plot %>% filter(population == "F1-1")
+f12 <- df_plot %>% filter(population == "F1-2")
+f14 <- df_plot %>%  filter(population == "F1-4")
+wus <- df_plot %>% filter(population == "WUS")
+
+
+# Create separate models
+
+chr_drc <- drm(`biomass_%` ~ treatment, population, data= chr, 
+              fct=LL.3(names=c("b", "upper", "ed50")))
+
+f11_drc <- drm(`biomass_%` ~ treatment, population, data= f11, 
+              fct=LL.3(names=c("b", "upper", "ed50")))
+
+f12_drc <- drm(`biomass_%` ~ treatment, population, data= f12, 
+              fct=LL.3(names=c("b", "upper", "ed50")))
+
+f14_drc <- drm(`biomass_%` ~ treatment, population, data= f14, 
+              fct=LL.3(names=c("b", "upper", "ed50")))
+
+wus_drc <- drm(`biomass_%` ~ treatment, population, data= wus, 
+              fct=LL.3(names=c("b", "upper", "ed50")))
+
+
+## chr - data
+chr_2 <- expand.grid(Rate=exp(seq(log(0.5), log(100000), length = length(chr$population))))
+
+pm_chr <- predict(chr_drc, newdata = chr_2, interval = "confidence")
+
+new_data_graph_chr_dicamba <- data.frame(pm_chr) %>% 
+  mutate(rate = chr_2$Rate,
+        population = "CHR",
+        biomass = chr$`biomass_%`) 
+
+# f1 -1 data
+f11_2 <- expand.grid(Rate=exp(seq(log(0.5), log(100000), length = length(f11$population))))
+
+pm_f11 <- predict(f11_drc, newdata = f11_2, interval = "confidence")
+
+new_data_graph_f11_dicamba <- data.frame(pm_f11) %>% 
+  mutate(rate = f11_2$Rate,
+        population = "F1-1",
+        biomass = f11$`biomass_%`) 
+
+# f1 -2 data
+f12_2 <- expand.grid(Rate=exp(seq(log(0.5), log(100000), length = length(f12$population))))
+
+pm_f12 <- predict(f12_drc, newdata = f12_2, interval = "confidence")
+
+new_data_graph_f12_dicamba <- data.frame(pm_f12) %>% 
+  mutate(rate = f12_2$Rate,
+        population = "F1-2",
+        biomass = f12$`biomass_%`) 
+
+# f1 -4 data
+f14_2 <- expand.grid(Rate=exp(seq(log(0.5), log(100000), length = length(f14$population))))
+
+pm_f14 <- predict(f14_drc, newdata = f14_2, interval = "confidence")
+
+new_data_graph_f14_dicamba <- data.frame(pm_f14) %>% 
+  mutate(rate = f14_2$Rate,
+        population = "F1-4",
+        biomass = f14$`biomass_%`) 
+# wus data
+wus_2 <- expand.grid(Rate=exp(seq(log(0.5), log(100000), length = length(wus$population))))
+
+pm_wus <- predict(wus_drc, newdata = wus_2, interval = "confidence")
+
+new_data_graph_wus_dicamba <- data.frame(pm_wus) %>% 
+  mutate(rate = wus_2$Rate,
+        population = "WUS",
+        biomass = wus$`biomass_%`) 
+
+
+# final dataset
+data_plot__biomass <- full_join(new_data_graph_chr_dicamba, new_data_graph_f11_dicamba) %>% 
+  full_join(new_data_graph_f12_dicamba) %>%
+  full_join(new_data_graph_f14_dicamba) %>%
+  full_join(new_data_graph_f11_dicamba) %>%
+  full_join(new_data_graph_wus_dicamba)  %>% 
+  mutate(population = factor(population, levels = c("CHR", "F1-1","F1-2", "F1-4", "WUS"))) 
+
+
+# plot
+
+biomass_trial_A <- ggplot(data_plot__biomass, aes(x = rate, y = biomass))  +
+  geom_line(size = 1.2, aes(x = rate, y = Prediction, colour = population,
+                  linetype = population)) +
+#geom_ribbon(aes(x = rate, y = Prediction, ymin = Lower, ymax = Upper, fill = ribbon),alpha = 0.1) +
+  coord_trans(x = "log") +
+  labs(x=expression("Dicamba rate in g a.e. ha"^-1)) + ylab( "Biomass reduction (%)")  +  ylim(0, 110) + scale_x_continuous(breaks=c(0, 10, 100, 1000, 10000))  +
+  scale_y_continuous(breaks=c(0, 25, 50, 75, 100))  +
+  theme_classic() +
+  geom_ribbon(mapping=aes(ymin=Upper, ymax=Lower, fill = population), width=0.2, alpha = .09) +
+  theme(legend.position = "bottom",
+        legend.text = element_text(colour="black", size=14),
+        legend.title = element_text(colour="black", size=14, 
+                                     face="bold"),) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),axis.text.x = element_text( color="black", size=14),axis.text.y = element_text( color="black", size=14)) +
+   scale_color_manual(values = c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F34925"),
+                      name = "Population") +
+  scale_linetype_manual(name = "Population", values=c(1,2,3,4,6)) +
+     scale_fill_manual(values = c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F34925"),
+                      name = "Population") 
+
+
+ggsave(plot = biomass_trial_A,"biomass_trial_A.tiff", units = "in", height = 12, width = 12, dpi = 300)
+
+```
+
+```{r}
+library(patchwork)
+
+
+biomass_trial_A / biomass_trial_B + plot_annotation(tag_levels = 'A') & 
+  theme(text = element_text('Times New Roman', size = 18))
+
+ggsave("DR_plots.tiff", units = "in", height = 11, width = 12, dpi = 300)
+```
+
